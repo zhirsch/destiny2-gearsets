@@ -82,6 +82,7 @@ type gearset struct {
 	titan   items
 	warlock items
 	weapons items
+	other   items
 }
 
 type gearsets map[int32]*gearset
@@ -95,6 +96,7 @@ func (gs gearsets) add(g, i *api.DestinyDefinitionsDestinyInventoryItemDefinitio
 			titan:   make(items),
 			warlock: make(items),
 			weapons: make(items),
+			other:   make(items),
 		}
 	}
 	// TODO(zhirsch): Don't hard code these values.
@@ -106,6 +108,8 @@ func (gs gearsets) add(g, i *api.DestinyDefinitionsDestinyInventoryItemDefinitio
 		gs[int32(g.Hash)].warlock.add(i, owned)
 	} else if containsInt32(i.ItemCategoryHashes, 1) {
 		gs[int32(g.Hash)].weapons.add(i, owned)
+	} else {
+		gs[int32(g.Hash)].other.add(i, owned)
 	}
 }
 
@@ -272,5 +276,6 @@ func main() {
 		printItems(g.titan, "Titan Armor")
 		printItems(g.warlock, "Warlock Armor")
 		printItems(g.weapons, "Weapons")
+		printItems(g.other, "Other")
 	}
 }
