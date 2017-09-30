@@ -7,10 +7,9 @@ import (
 	"sort"
 	"strconv"
 
-	"./api"
-	"./db"
-
 	_ "github.com/mattn/go-sqlite3"
+	api "github.com/zhirsch/destiny2-api"
+	db "github.com/zhirsch/destiny2-db"
 )
 
 var (
