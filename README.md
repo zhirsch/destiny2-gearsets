@@ -17,4 +17,4 @@ $ go run gearsets.go -user zhirsch -apikey <apikey>
 ```
 
 [make your inventory public]: https://www.bungie.net/en/Profile/Settings?category=Privacy
-[assign yourself an API key]: https://www.bungie.net/en/Application.
+[assign yourself an API key]: https://www.bungie.net/en/Application
