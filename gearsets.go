@@ -16,7 +16,6 @@ import (
 var (
 	apiKey = flag.String("apikey", "", "the Bungie API key")
 	user   = flag.String("user", "", "the user to query")
-	dbPath = flag.String("dbpath", "", "the path to the manifest database")
 )
 
 func containsInt32(haystack []int32, needle int32) bool {
