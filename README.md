@@ -13,7 +13,8 @@ You'll also need to [assign yourself an API key].
 ## Example command line
 
 ```shell
-$ go run gearsets.go -user zhirsch -apikey <apikey>
+$ go get -u github.com/zhirsch/destiny2-gearsets
+$ $(go env GOPATH)/bin/destiny2-gearsets -user zhirsch -apikey <apikey>
 ```
 
 [make your inventory public]: https://www.bungie.net/en/Profile/Settings?category=Privacy
