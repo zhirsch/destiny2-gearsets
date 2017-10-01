@@ -7,16 +7,21 @@ import (
 	"sort"
 	"strconv"
 
-	api "github.com/zhirsch/destiny2-api"
+	"github.com/go-openapi/runtime"
+	runtime_client "github.com/go-openapi/runtime/client"
+	"github.com/zhirsch/destiny2-api/client"
+	"github.com/zhirsch/destiny2-api/client/destiny2"
+	"github.com/zhirsch/destiny2-api/client/user"
+	"github.com/zhirsch/destiny2-api/models"
 	db "github.com/zhirsch/destiny2-db"
 )
 
 var (
-	apiKey = flag.String("apikey", "", "the Bungie API key")
-	user   = flag.String("user", "", "the user to query")
+	flagAPIKey = flag.String("apikey", "", "the Bungie API key")
+	flagUser   = flag.String("user", "", "the user to query")
 )
 
-func containsInt32(haystack []int32, needle int32) bool {
+func contains(haystack []uint32, needle uint32) bool {
 	for _, x := range haystack {
 		if x == needle {
 			return true
@@ -34,7 +39,7 @@ type item struct {
 
 type items map[int32]*item
 
-func (is items) add(i *api.DestinyDefinitionsDestinyInventoryItemDefinition, owned bool) {
+func (is items) add(i *models.DestinyDefinitionsDestinyInventoryItemDefinition, owned bool) {
 	is[int32(i.Hash)] = &item{
 		hash:        int32(i.Hash),
 		name:        i.DisplayProperties.Name,
@@ -86,7 +91,7 @@ type gearset struct {
 
 type gearsets map[int32]*gearset
 
-func (gs gearsets) add(g, i *api.DestinyDefinitionsDestinyInventoryItemDefinition, owned bool) {
+func (gs gearsets) add(g, i *models.DestinyDefinitionsDestinyInventoryItemDefinition, owned bool) {
 	if _, ok := gs[int32(g.Hash)]; !ok {
 		gs[int32(g.Hash)] = &gearset{
 			hash:    int32(g.Hash),
@@ -99,13 +104,13 @@ func (gs gearsets) add(g, i *api.DestinyDefinitionsDestinyInventoryItemDefinitio
 		}
 	}
 	// TODO(zhirsch): Don't hard code these values.
-	if containsInt32(i.ItemCategoryHashes, 23) {
+	if contains(i.ItemCategoryHashes, 23) {
 		gs[int32(g.Hash)].hunter.add(i, owned)
-	} else if containsInt32(i.ItemCategoryHashes, 22) {
+	} else if contains(i.ItemCategoryHashes, 22) {
 		gs[int32(g.Hash)].titan.add(i, owned)
-	} else if containsInt32(i.ItemCategoryHashes, 21) {
+	} else if contains(i.ItemCategoryHashes, 21) {
 		gs[int32(g.Hash)].warlock.add(i, owned)
-	} else if containsInt32(i.ItemCategoryHashes, 1) {
+	} else if contains(i.ItemCategoryHashes, 1) {
 		gs[int32(g.Hash)].weapons.add(i, owned)
 	} else {
 		gs[int32(g.Hash)].other.add(i, owned)
@@ -143,59 +148,86 @@ func (gs gearsets) sortedKeys() []int32 {
 	return keys
 }
 
-func parseCharacterID(s string) int64 {
-	if id, err := strconv.ParseInt(s, 10, 64); err != nil {
-		panic(err)
-	} else {
-		return id
+func isError(errorCode models.ExceptionsPlatformErrorCodes) error {
+	if errorCode != 1 {
+		return fmt.Errorf("request failed: %v", errorCode)
 	}
+	return nil
 }
 
-func getCharacterItems(client *api.APIClient, destinyMembership api.UserUserInfoCard) []uint32 {
-	args := map[string]interface{}{"components": []api.DestinyDestinyComponentType{100}}
-	response, _, err := client.Destiny2Api.Destiny2GetProfile(destinyMembership.MembershipId, destinyMembership.MembershipType, args)
+func getCharacterItems(api *client.BungieNet, auth runtime.ClientAuthInfoWriter, destinyMembership *models.UserUserInfoCard) ([]uint32, error) {
+	params := destiny2.NewDestiny2GetProfileParams()
+	params.SetDestinyMembershipID(destinyMembership.MembershipID)
+	params.SetMembershipType(int32(destinyMembership.MembershipType))
+	params.SetComponents([]int64{100})
+	resp, err := api.Destiny2.Destiny2GetProfile(params, auth)
 	if err != nil {
-		panic(err)
+		return nil, err
+	}
+	if err := isError(resp.Payload.ErrorCode); err != nil {
+		return nil, err
 	}
 	var items []uint32
-	for _, characterIDStr := range response.Response.Profile.Data.CharacterIds {
-		characterID := parseCharacterID(characterIDStr)
-		args := map[string]interface{}{"components": []api.DestinyDestinyComponentType{201, 205}}
-		response, _, err := client.Destiny2Api.Destiny2GetCharacter(characterID, destinyMembership.MembershipId, destinyMembership.MembershipType, args)
+	for _, characterIDStr := range resp.Payload.Response.Profile.Data.CharacterIds {
+		characterID, err := strconv.ParseInt(characterIDStr, 10, 64)
 		if err != nil {
-			panic(err)
+			return nil, err
 		}
-		for _, item := range response.Response.Equipment.Data.Items {
+		params := destiny2.NewDestiny2GetCharacterParams()
+		params.SetCharacterID(characterID)
+		params.SetDestinyMembershipID(destinyMembership.MembershipID)
+		params.SetMembershipType(int32(destinyMembership.MembershipType))
+		params.SetComponents([]int64{201, 205})
+		resp, err := api.Destiny2.Destiny2GetCharacter(params, auth)
+		if err != nil {
+			return nil, err
+		}
+		if err := isError(resp.Payload.ErrorCode); err != nil {
+			return nil, err
+		}
+		for _, item := range resp.Payload.Response.Equipment.Data.Items {
 			items = append(items, item.ItemHash)
 		}
-		if response.Response.Inventory.Data != nil {
-			for _, item := range response.Response.Inventory.Data.Items {
+		if resp.Payload.Response.Inventory.Data != nil {
+			for _, item := range resp.Payload.Response.Inventory.Data.Items {
 				items = append(items, item.ItemHash)
 			}
 		}
 	}
-	return items
+	return items, nil
 }
 
-func getVaultItems(client *api.APIClient, destinyMembership api.UserUserInfoCard) []uint32 {
-	args := map[string]interface{}{"components": []api.DestinyDestinyComponentType{102}}
-	response, _, err := client.Destiny2Api.Destiny2GetProfile(destinyMembership.MembershipId, destinyMembership.MembershipType, args)
+func getVaultItems(api *client.BungieNet, auth runtime.ClientAuthInfoWriter, destinyMembership *models.UserUserInfoCard) ([]uint32, error) {
+	params := destiny2.NewDestiny2GetProfileParams()
+	params.SetDestinyMembershipID(destinyMembership.MembershipID)
+	params.SetMembershipType(int32(destinyMembership.MembershipType))
+	params.SetComponents([]int64{102})
+	resp, err := api.Destiny2.Destiny2GetProfile(params, auth)
 	if err != nil {
-		panic(err)
+		return nil, err
+	}
+	if err := isError(resp.Payload.ErrorCode); err != nil {
+		return nil, err
 	}
 	var items []uint32
-	if response.Response.ProfileInventory.Data != nil {
-		for _, item := range response.Response.ProfileInventory.Data.Items {
+	if resp.Payload.Response.ProfileInventory.Data != nil {
+		for _, item := range resp.Payload.Response.ProfileInventory.Data.Items {
 			items = append(items, item.ItemHash)
 		}
 	}
-	return items
+	return items, nil
 }
 
-func getItems(client *api.APIClient, destinyMembership api.UserUserInfoCard) []uint32 {
-	items := getCharacterItems(client, destinyMembership)
-	items = append(items, getVaultItems(client, destinyMembership)...)
-	return items
+func getItems(api *client.BungieNet, auth runtime.ClientAuthInfoWriter, destinyMembership *models.UserUserInfoCard) ([]uint32, error) {
+	characterItems, err := getCharacterItems(api, auth, destinyMembership)
+	if err != nil {
+		return nil, err
+	}
+	vaultItems, err := getVaultItems(api, auth, destinyMembership)
+	if err != nil {
+		return nil, err
+	}
+	return append(characterItems, vaultItems...), nil
 }
 
 func printItems(items items, name string) {
@@ -216,54 +248,61 @@ func printItems(items items, name string) {
 func main() {
 	flag.Parse()
 
-	// Create an API client.
-	cfg := api.NewConfiguration()
-	cfg.AddDefaultHeader("X-API-Key", *apiKey)
-	client := api.NewAPIClient(cfg)
+	// Create the authentication and API client.
+	auth := runtime_client.APIKeyAuth("X-API-Key", "header", *flagAPIKey)
+	api := client.Default
 
 	// Open the manifest database.
-	db, err := db.Open(client)
+	db, err := db.Open(api, auth)
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	// Lookup the Bungie user.
-	args := map[string]interface{}{"q": *user}
-	response, _, err := client.UserApi.UserSearchUsers(args)
+	params := user.NewUserSearchUsersParams()
+	params.SetQ(flagUser)
+	resp, err := api.User.UserSearchUsers(params, auth)
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 
 	// Get all the items owned by the user.
 	ownedItems := make(map[uint32]bool)
-	for _, user := range response.Response {
-		resp, _, err := client.UserApi.UserGetMembershipDataById(user.MembershipId, -1)
+	for _, u := range resp.Payload.Response {
+		params := user.NewUserGetMembershipDataByIDParams()
+		params.SetMembershipID(u.MembershipID)
+		params.SetMembershipType(-1)
+		resp, err := api.User.UserGetMembershipDataByID(params, auth)
 		if err != nil {
-			panic(err)
+			log.Fatal(err)
 		}
-		for _, destinyMembership := range resp.Response.DestinyMemberships {
-			for _, itemHash := range getItems(client, destinyMembership) {
+		for _, destinyMembership := range resp.Payload.Response.DestinyMemberships {
+			items, err := getItems(api, auth, destinyMembership)
+			if err != nil {
+				log.Fatal(err)
+			}
+			for _, itemHash := range items {
 				ownedItems[itemHash] = true
 			}
 		}
 	}
 
 	// Build the list of gearsets, and mark which items in them are owned by the user.
-	gearsetDefinitions, err := db.GetAll("DestinyInventoryItemDefinition", &api.DestinyDefinitionsDestinyInventoryItemDefinition{})
+	gearsetDefinitions, err := db.GetAll("DestinyInventoryItemDefinition", &models.DestinyDefinitionsDestinyInventoryItemDefinition{})
 	if err != nil {
 		log.Fatal(err)
 	}
 	gs := make(gearsets)
-	for _, gearsetDefinition := range gearsetDefinitions.([]*api.DestinyDefinitionsDestinyInventoryItemDefinition) {
+	for _, gearsetDefinition := range gearsetDefinitions.([]*models.DestinyDefinitionsDestinyInventoryItemDefinition) {
 		if gearsetDefinition.Gearset == nil {
 			continue
 		}
 		for _, itemHash := range gearsetDefinition.Gearset.ItemList {
-			itemDefinition, err := db.Get("DestinyInventoryItemDefinition", itemHash, &api.DestinyDefinitionsDestinyInventoryItemDefinition{})
+			itemDefinition, err := db.Get("DestinyInventoryItemDefinition", itemHash, &models.DestinyDefinitionsDestinyInventoryItemDefinition{})
 			if err != nil {
 				log.Fatal(err)
 			}
-			gs.add(gearsetDefinition, itemDefinition.(*api.DestinyDefinitionsDestinyInventoryItemDefinition), ownedItems[itemHash])
+			gs.add(gearsetDefinition, itemDefinition.(*models.DestinyDefinitionsDestinyInventoryItemDefinition), ownedItems[itemHash])
 		}
 	}
 
